@@ -1,0 +1,73 @@
+#include <stdio.h>
+#include "xgpio.h"
+#include "xil_printf.h"
+#include "xparameters.h"
+#include "sleep.h"
+
+/* --- GPIO 信息 --- */
+#define LED_DEVICE_ID      XPAR_AXI_GPIO_LED_DEVICE_ID
+#define ENC_DEVICE_ID      XPAR_ENCODER_DEVICE_ID
+
+XGpio led_gpio;
+XGpio enc_gpio;
+
+/* --- 四相状态机用的表 --- */
+/*
+   Quad Decode 表 (Gray code)
+   上一状态(old_state)*4 + 当前状态(new_state)
+   表中的值:
+     +1 = 顺时针
+     -1 = 逆时针
+      0 = 无效变化 / 抖动
+*/
+const int8_t quad_table[16] = {
+     0,  -1,   1,   0,
+     1,   0,   0,  -1,
+    -1,   0,   0,   1,
+     0,   1,  -1,   0
+};
+
+int main()
+{
+    int status;
+    int led_index = 0;
+    uint8_t old_state, new_state;
+
+    xil_printf("Rotary Encoder LED Control Start\n");
+
+    /* --- 初始化 LED --- */
+    status = XGpio_Initialize(&led_gpio, LED_DEVICE_ID);
+    XGpio_SetDataDirection(&led_gpio, 1, 0x0000);   // LED 全部输出
+
+    /* --- 初始化 ENCODER（A=bit0, B=bit1）--- */
+    status = XGpio_Initialize(&enc_gpio, ENC_DEVICE_ID);
+    XGpio_SetDataDirection(&enc_gpio, 1, 0xFFFF);  // 输入
+
+    /* 读取初态 */
+    old_state = XGpio_DiscreteRead(&enc_gpio, 1) & 0x03;
+
+    while (1)
+    {
+        new_state = XGpio_DiscreteRead(&enc_gpio, 1) & 0x03;
+
+        int movement = quad_table[(old_state << 2) | new_state];
+
+        if (movement == 1)
+        {
+            /* 顺时针 → 亮下一个 */
+            led_index = (led_index + 1) & 0x0F;
+            XGpio_DiscreteWrite(&led_gpio, 1, (1 << led_index));
+        }
+        else if (movement == -1)
+        {
+            /* 逆时针 → 亮上一个 */
+            led_index = (led_index - 1) & 0x0F;
+            XGpio_DiscreteWrite(&led_gpio, 1, (1 << led_index));
+        }
+
+        old_state = new_state;
+        usleep(1000);    // 1ms 消抖（关键）
+    }
+
+    return 0;
+}
